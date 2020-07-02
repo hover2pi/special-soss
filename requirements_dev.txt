@@ -12,7 +12,7 @@ astropy==4.0
 numpy==1.18.1
 bokeh==1.2.0
 scipy==1.2.1
-hotsoss==0.1.6
+hotsoss==0.1.7
 
-pytest==3.8.2
+pytest==4.6
 pytest-runner==4.2

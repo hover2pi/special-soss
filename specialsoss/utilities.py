@@ -2,10 +2,64 @@
 
 """A module of shared tools for SOSS data"""
 
+from copy import copy
 import os
 from pkg_resources import resource_filename
 
+from bokeh.plotting import figure, show
+from hotsoss.plotting import plot_frame
 import numpy as np
+
+
+def bin_counts(data, wavebins, pixel_mask=None, plot_bin=None):
+    """
+    Bin the counts in data given the wavelength bin information
+
+    Parameters
+    ----------
+    data: array-like
+        The 3D or 4D data to bin
+    wavebins: sequence
+        A list of lists of the pixels in each wavelength bin
+    pixel_mask: array-like (optional)
+        A 2D mask of 1s and 0s to apply to the data
+    plot_bin: int
+        The index of the bin to plot
+
+    Returns
+    -------
+    np.ndarray
+        The counts in each wavelength bin for each frame in data
+    """
+    # Reshape into 3D
+    data, dims = to_3d(data)
+
+    # Array to store counts
+    counts = np.zeros((data.shape[0], len(wavebins)), dtype=float)
+
+    # Apply the pixel mask by multiplying non-signal pixels by 0 before adding
+    if isinstance(pixel_mask, np.ndarray) and pixel_mask.shape == data.shape[-2:]:
+        data *= pixel_mask[None, :, :]
+
+    # Add up the counts in each bin in each frame
+    for n, (xpix, ypix) in enumerate(wavebins):
+        cutoff = xpix < dims[-2]
+        counts[:, n] = np.nansum(data[:, xpix[cutoff], ypix[cutoff]], axis=1)
+
+    # Plot a bin for visual inspection
+    if isinstance(plot_bin, int):
+
+        # Make frame from binned pixels
+        binpix = wavebins[plot_bin]
+        binframe = copy(data[-1])
+        binframe[binpix[0], binpix[1]] *= 10
+        fig = plot_frame(binframe, title="Bin {}: {:.0f} counts in {:.2f} pixels".format(plot_bin, counts[-1][plot_bin], np.nansum(pixel_mask[binpix[0], binpix[1]])))
+        show(fig)
+
+    # Restore original shape
+    counts = counts.reshape((*list(dims[:-2]), counts.shape[-1]))
+
+    return counts
 
 
 def combine_spectra(s1, s2):
@@ -24,6 +78,12 @@ def combine_spectra(s1, s2):
     sequence
         The [W, F, E] of the combined spectrum
     """
+    # Remove NaN and zero wavelengths
+    idx1 = np.where(s1[0] > 0.)[0]
+    idx2 = np.where(s2[0] > 0.)[0]
+    s1 = np.array([i[idx1] for i in s1])
+    s2 = np.array([i[idx2] for i in s2])
+
     # Determine if overlapping
     overlap = True
     try:
@@ -97,6 +157,32 @@ def combine_spectra(s1, s2):
     return new_spec
 
 
+def nan_reference_pixels(data):
+    """
+    Convert reference pixels in SOSS data to NaN values
+    """
+    # Convert to 3D
+    data, dims = to_3d(data)
+
+    # Left, right (all subarrays)
+    if dims[-1] == 2048:
+        data[:, :, :4] = np.nan
+        data[:, :, -4:] = np.nan
+
+    # Top (excluding SUBSTRIP96)
+    if dims[-2] in [256, 2048]:
+        data[:, -4:, :] = np.nan
+
+    # Bottom (Only FULL frame)
+    if dims[-2] == 2048:
+        data[:, :4, :] = np.nan
+
+    # Return to original shape
+    data = data.reshape(dims)
+
+    return data
+
+
 def test_simulations():
     """
     Make test simulations using awesimsoss
@@ -118,3 +204,37 @@ def test_simulations():
 
     except ImportError:
         print("Please install awesimsoss to generate test simulations.")
+
+
+def to_3d(data):
+    """
+    Class to convert arbitrary data into 3 dimensions
+
+    Parameters
+    ----------
+    data: array-like
+        The data to reshape
+
+    Returns
+    -------
+    new_data, old_shape
+        The reshaped data and the old shape
+    """
+    # Ensure it's an array
+    if isinstance(data, list):
+        data = np.asarray(data)
+
+    # Get the data shape
+    old_shape = data.shape
+
+    # Convert to 3D
+    if data.ndim == 4:
+        new_data = data.reshape((old_shape[0]*old_shape[1], old_shape[2], old_shape[3]))
+    elif data.ndim == 3:
+        new_data = copy(data)
+    elif data.ndim == 2:
+        new_data = data[None, :, :]
+    else:
+        raise ValueError("{}: Data must be in 2, 3, or 4 dimensions.".format(old_shape))
+
+    return new_data, old_shape

@@ -2,12 +2,13 @@
 
 """A module for the 1D spectral extraction summation method"""
 
-import astropy.units as q
-from hotsoss import utils
+from hotsoss import locate_trace as lt
 import numpy as np
 
+from . import utilities as u
 
-def extract(data, filt, subarray='SUBSTRIP256', units=q.erg/q.s/q.cm**2/q.AA, **kwargs):
+
+def extract(data, filt, pixel_masks=None, subarray='SUBSTRIP256', **kwargs):
     """
     Extract the time-series 1D spectra from a data cube
 
@@ -17,45 +18,43 @@ def extract(data, filt, subarray='SUBSTRIP256', units=q.erg/q.s/q.cm**2/q.AA, **
         The CLEAR+GR700XD or F277W+GR700XD datacube
     filt: str
         The name of the filter, ['CLEAR', 'F277W']
+    pixel_masks: sequence
+        The pixel masks for each order
     subarray: str
         The subarray name
-    units: astropy.units.quantity.Quantity
-        The desired units for the output flux
 
     Returns
     -------
     dict
         The wavelength array and time-series 1D counts and spectra
     """
-    # Make sure data is 3D
-    if data.ndim == 4:
-        data = data.reshape((data.shape[0]*data.shape[1], data.shape[2], data.shape[3]))
+    # Dictionary for results
+    results = {}
 
-    # Trim reference pixels
-    # Left, right (all subarrays)
-    data = data[:, :, 4:-4]
+    # Load the wavebins
+    order1_wave, order2_wave = lt.trace_wavelengths(order=None, wavecal_file=None, npix=10, subarray='SUBSTRIP256')
+    order1_bins, order2_bins = lt.wavelength_bins(subarray=subarray)
 
-    # Top (excluding SUBSTRIP96)
-    if subarray != 'SUBSTRIP96':
-        data = data[:, :-4, :]
+    # Reshape
+    data, dims = u.to_3d(data)
 
-    # Bottom (Only FULL frame)
-    if subarray == 'FULL':
-        data = data[:, 4:, :]
+    # NaN reference pixels
+    data = u.nan_reference_pixels(data)
 
-    # Get total counts in each pixel column
-    counts = np.nansum(data, axis=1)
+    # Load the pixel masks
+    if pixel_masks is None:
+        pixel_masks = np.ones((2, data.shape[-2], data.shape[-1]))
 
-    # Get the wavelength map
-    wavemap = utils.wave_solutions(subarray=subarray, order=1, **kwargs)
+    # Bin the order 1 counts
+    order1_counts = np.nansum(data * pixel_masks[0], axis=1)
+    order1_unc = np.ones_like(order1_counts)
 
-    # Get mean wavelength in each column
-    wavelength = np.nanmean(wavemap, axis=0)[4:-4]
+    # Bin the order 2 counts
+    order2_counts = np.nansum(data * pixel_masks[0], axis=1)
+    order2_unc = np.ones_like(order2_counts)
 
-    # Convert to flux using first order response
-    flux = utils.counts_to_flux(wavelength, counts, filt=filt, subarray=subarray, order=1, units=units, **kwargs)
-
-    # Make results dictionary
-    results = {'final': {'wavelength': wavelength, 'counts': counts, 'flux': flux, 'filter': filt, 'subarray': subarray}}
+    # Save results
+    results['order1'] = {'counts': order1_counts, 'unc': order1_unc, 'wavelength': order1_wave, 'filter': filt, 'subarray': subarray}
+    results['order2'] = {'counts': order2_counts, 'unc': order2_unc, 'wavelength': order2_wave, 'filter': filt, 'subarray': subarray}
 
     return results
